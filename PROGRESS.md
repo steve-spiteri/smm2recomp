@@ -1,6 +1,17 @@
 # Progress
 
 ## PAUSED 2026-10-25 after v0.5.5 (owner's call); resume from here
+- **v0.6.4 (2026-11-01):** the iPad black screen solved. Every iPad session that reached its 11th course start froze
+  there (all three logged, 206 guest CreateThreads each); the watchdog showed CourseIn queueing 0x80 every frame with no
+  scene change, and the threads created at the result screen's Next started but never ran. Cause: kernel.c never joined
+  an ended guest thread's host thread before a reboot; Darwin frees the 256 MB stack at exit but keeps a small piece
+  mapped until the join, so the hole is too small for the next stack and each thread took fresh address space (Mac:
+  56.7 GB stack span after 122 threads, 7.0 GB with the fix); iOS ran out, pthread_create failed unchecked. Fix:
+  thread_start joins ended threads first and logs a failed start; core_acquire follows a SetThreadCoreMask made while
+  waiting for the first core (it used to wait on the old core). Not standby or the server. Also PR #59 merged
+  (steve-spiteri: the Chinese / Traditional Chinese / Korean shared fonts, loaded on first use). #56, #34, #58 replied
+  (owner OK; #58: all text missing = drawing, not fonts: asked for the log, system, version). Autoplay still stops at
+  the skip hint after the 4th death (test harness gap). Released with Mac + iPad installs.
 - **After v0.6.0 (2026-10-31, on main):** PR #57 merged (ElDeluxo: Vulkan texture allocation retries, then host
   memory; the guest heap not imported on integrated GPUs whose one shared heap is under heap + 3 GB - narrowed from
   "any integrated / <=4 GB GPU" so discrete 4 GB cards and the Steam Deck keep the import; cross-compiled locally, CI
