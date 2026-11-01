@@ -136,7 +136,10 @@ static void core_acquire(KThread *t) {
     if (!c->owner) { c->owner = t; return; }
     t->want_core = true;
     uint64_t t0 = plat_now_ns();
-    while (c->owner != t && !g_rt_unwind) {
+    // (t->core read again each time: SetThreadCoreMask can move a thread still waiting for its first core - core_move -
+    // and the new core is then handed to it, or free)
+    while (t->core >= 0 && (c = &g_cores[t->core])->owner != t && !g_rt_unwind) {
+        if (!c->owner) { c->owner = t; break; }
         struct timespec ts;
         deadline(&ts, 250000000);
         if (pthread_cond_timedwait(&t->cond, &g_klock, &ts) != 0 && c->owner != t) {
@@ -151,7 +154,7 @@ static void core_acquire(KThread *t) {
         }
     }
     t->want_core = false;
-    if (c->owner != t) c->owner = t;  // (reboot unwinding)
+    if (t->core >= 0 && g_cores[t->core].owner != t) g_cores[t->core].owner = t;  // (reboot unwinding)
     g_blocked_ns += plat_now_ns() - t0;
 }
 
@@ -303,12 +306,33 @@ static KThread *thread_new(uint64_t entry, uint64_t arg, uint64_t stack_top, int
     return t;
 }
 
+// Joins the host threads of guest threads that have ended. Until then an ended thread's stack is freed but a small
+// piece of it stays mapped, so the 256 MB hole it leaves is too small for the next stack and every new thread takes
+// fresh address space. The game starts about 8 threads per course; on iOS, whose address space is far smaller than
+// macOS's, the threads of a session's 11th course could no longer be created and the course never came (a black
+// screen with the map's music, 2026-11-01).
+static void threads_reap(void) {
+    KThread *done[64];
+    int n = 0;
+    pthread_mutex_lock(&g_klock);
+    for (KThread *t = g_threads; t && n < 64; t = t->anext)
+        if (t->started && t->finished && !t->joined) t->joined = true, done[n++] = t;
+    pthread_mutex_unlock(&g_klock);
+    for (int i = 0; i < n; i++) pthread_join(done[i]->host, NULL);  // (past `finished`: only its return is left)
+}
+
 static void thread_start(KThread *t) {
+    threads_reap();
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, 256ull << 20);  // guest recursion runs on the host stack
     t->started = true;
-    pthread_create(&t->host, &attr, thread_main, t);
+    int err = pthread_create(&t->host, &attr, thread_main, t);
+    if (err) {
+        t->started = false;
+        LOG("[kernel] thread %llu (entry %llx) could not be started: %s\n", (unsigned long long)t->id,
+            (unsigned long long)t->entry, strerror(err));
+    }
     pthread_attr_destroy(&attr);
 }
 
@@ -986,7 +1010,7 @@ void kernel_stop_threads(void (*idle)(void)) {
     }
     int n = 0;
     for (KThread *t = g_threads; t; t = t->anext)
-        if (t->started) { pthread_join(t->host, NULL); n++; }
+        if (t->started && !t->joined) { pthread_join(t->host, NULL); n++; }
     LOG("[reboot] %d guest threads stopped in %llums\n", n, (unsigned long long)((plat_now_ns() - t0) / 1000000));
 }
 
