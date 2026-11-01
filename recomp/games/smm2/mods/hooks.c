@@ -5,8 +5,9 @@
 //   - skip during the miss demo: the run flag that makes it cost a life is cleared again (SMM1's skip is free);
 //   - retry after a miss: coins and score go back to their values at the start of the course (SMM1 throws away
 //     what the failed attempt collected);
-//   - extra lives: an award worth several lives (3-Up Moon) banks one pending 1-Up, as in SMM1 (the cap of 3 per
-//     course and the pay-out on clear are SMM2's own and the same as SMM1's).
+//   - extra lives: nothing changes (the cap of 3 per course and the pay-out on clear are SMM2's own and the same as
+//     SMM1's); the 1-Ups banked are logged. (They used to count one per award, for the 3-Up Moon, but the game adds up
+//     a frame's 1-Ups before banking them, so the goal's enemy chain - several 1-Ups at once - banked only one.)
 // Otherwise nothing changes.
 #include "mod.h"
 
@@ -91,16 +92,10 @@ void smm2_mod_after(Cpu *c, uint64_t addr) {
     case 0x16ce788: case 0x16ce9e0:  // pending 1-Ups loaded (w4) before an award is added
         pending_before = (uint32_t)c->x[4];
         break;
-    case 0x16ce7f4: case 0x16cea48:  // ... and stored: an award counts as one
+    case 0x16ce7f4: case 0x16cea48:  // ... and stored
         if ((uint32_t)c->x[4] != pending_before)
             LOG("[mod] 1-Up banked (%s): pending %u -> %u\n", addr - MAIN_ADDR(0) == 0x16ce7f4 ? "coins" : "item",
                 pending_before, (uint32_t)c->x[4]);
-        if ((uint32_t)c->x[4] > pending_before + 1) {
-            LOG("[mod] award: pending 1-Ups %u -> %u, banked as %u (SMM1: one per award)\n", pending_before,
-                (uint32_t)c->x[4], pending_before + 1);
-            c->x[4] = pending_before + 1;
-            s32(c->x[16] + 0x38, pending_before + 1);
-        }
         break;
     default:
         lives_cap(c, addr);
